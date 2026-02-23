@@ -1,0 +1,12 @@
+# Ignore large files
+*.mp4
+*.avi
+*.pth
+*.pt
+*.h5
+*.pkl
+
+# Ignore datasets
+dataset/
+datasets/
+videos/
