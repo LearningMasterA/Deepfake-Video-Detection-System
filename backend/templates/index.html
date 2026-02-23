@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Deepfake Detection</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="container">
+    <h2>Deepfake Video Detection System</h2>
+
+    <form action="/predict" enctype="multipart/form-data" method="post">
+        <input type="file" name="file" required>
+        <button type="submit">Analyze Video</button>
+    </form>
+
+    {% if prediction %}
+        <div class="result">
+            <h3>Prediction: {{ prediction }}</h3>
+            <p>Confidence Score: {{ confidence }}</p>
+        </div>
+    {% endif %}
+</div>
+
+</body>
+</html>
