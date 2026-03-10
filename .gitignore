@@ -7,6 +7,5 @@
 *.pkl
 
 # Ignore datasets
-dataset/
 datasets/
 videos/
