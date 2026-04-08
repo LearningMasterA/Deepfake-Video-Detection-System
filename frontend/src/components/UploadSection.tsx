@@ -13,6 +13,7 @@ export const UploadSection = () => {
   const [frames, setFrames] = useState<string[]>([]);
   const [confidence, setConfidence] = useState<number | null>(null);
   const { toast } = useToast();
+  const [heatmaps, setHeatmaps] = useState<string[]>([]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -49,10 +50,11 @@ export const UploadSection = () => {
   };
 
   const analyzeVideo = async () => {
-  if (!file) return;
+  const data = await analyzeVideoAPI(file);
 
-  setIsAnalyzing(true);
-  setResult(null);
+setResult(data.prediction === "Real" ? "real" : "fake");
+setFrames(data.frames || []);
+setHeatmaps(data.heatmaps || []);   // ✅ ADD THIS
 
   try {
     const data = await analyzeVideoAPI(file);
@@ -239,6 +241,32 @@ export const UploadSection = () => {
           alt="frame"
           className="w-full h-full object-cover"
         />
+        </div>
+      ))}
+    </div>
+  </div>
+)}
+{heatmaps.length > 0 && (
+  <div className="mt-8">
+    <h4 className="text-xl font-semibold mb-4 text-center">
+      🔥 Grad-CAM Visualization
+    </h4>
+
+    <p className="text-center text-muted-foreground mb-4">
+      Highlighted regions show where the model focused to make its decision.
+    </p>
+
+    <div className="flex flex-wrap gap-4 justify-center">
+      {heatmaps.map((img, index) => (
+        <div key={index} className="flex flex-col items-center">
+          <img
+            src={`http://localhost:8000${img}`}
+            alt="heatmap"
+            className="w-40 rounded shadow border border-primary/30"
+          />
+          <span className="text-xs mt-1 text-muted-foreground">
+            Frame {index + 1}
+          </span>
         </div>
       ))}
     </div>

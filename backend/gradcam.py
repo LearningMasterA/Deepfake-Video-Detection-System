@@ -1,0 +1,32 @@
+import cv2
+import numpy as np
+import torch
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.image import show_cam_on_image
+from model_loader import model
+
+
+def generate_gradcam(image_tensor, raw_image):
+
+    # Select target layer
+    target_layer = model.features[-1]
+
+    cam = GradCAM(model=model, target_layers=[target_layer])
+
+    input_tensor = image_tensor.unsqueeze(0)
+
+    grayscale_cam = cam(input_tensor=input_tensor)[0]
+
+    # ✅ Resize heatmap to match image
+    grayscale_cam = cv2.resize(
+        grayscale_cam,
+        (raw_image.shape[1], raw_image.shape[0])
+    )
+
+    # Convert image to RGB and normalize
+    rgb_img = raw_image.astype(np.float32) / 255.0
+
+    # Generate overlay
+    heatmap = show_cam_on_image(rgb_img, grayscale_cam, use_rgb=True)
+
+    return heatmap

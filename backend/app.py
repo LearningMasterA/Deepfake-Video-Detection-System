@@ -5,6 +5,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import shutil
 import os
+import cv2
+from gradcam import generate_gradcam
 
 from preprocessing import extract_faces
 from inference import predict
@@ -42,17 +44,23 @@ async def detect_deepfake(file: UploadFile = File(...)):
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    frames, image_paths = extract_faces(file_path)
+    frames,raw_images, image_paths = extract_faces(file_path)
     
-    score, prediction = predict(frames)
+    score, prediction, heatmaps = predict(frames, raw_images)
 
-    confidence = score if prediction == "Fake" else 1 - score
-    confidence = round(confidence, 4)   
+    heatmap_paths = []
+
+    for i, heatmap in enumerate(heatmaps):
+      path = f"static/heatmap_{i}.jpg"
+      cv2.imwrite(path, heatmap)
+      heatmap_paths.append("/" + path) 
+    
+     
 
     return {
-        "prediction": prediction,
-        "confidence": confidence,
-        "frames": image_paths
-    
-    }
+    "prediction": prediction,
+    "confidence": score,
+    "frames": image_paths,
+    "heatmaps": heatmap_paths
+}
     
