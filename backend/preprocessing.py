@@ -15,9 +15,12 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 #     transforms.ToTensor()
 # ])
 
-def extract_faces(video_path):
+def extract_faces(video_path, output_prefix="frame", start_time_seconds=0.0):
 
     cap = cv2.VideoCapture(video_path)
+
+    if start_time_seconds > 0:
+        cap.set(cv2.CAP_PROP_POS_MSEC, start_time_seconds * 1000)
 
     frames = []
     raw_images = []
@@ -38,7 +41,7 @@ def extract_faces(video_path):
         transforms.ToTensor()
     ])
 
-    frame_count = 0
+    frame_count = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
     saved_count = 0
 
     while cap.isOpened():
@@ -69,16 +72,18 @@ def extract_faces(video_path):
             if face.size == 0:
                 continue
 
+            face_rgb = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
+
             # save raw image for Grad-CAM
             raw_images.append(face)
 
             # convert to tensor
-            face_tensor = transform(face)
+            face_tensor = transform(face_rgb)
 
             frames.append(face_tensor)
 
             # save image for frontend display
-            image_path = f"static/frame_{saved_count}.jpg"
+            image_path = f"static/{output_prefix}_frame_{saved_count}.jpg"
             cv2.imwrite(image_path, face)
 
             image_paths.append("/" + image_path)

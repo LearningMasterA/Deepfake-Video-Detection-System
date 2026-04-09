@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Upload, FileVideo, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Upload, FileVideo, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
@@ -14,6 +14,8 @@ export const UploadSection = () => {
   const [confidence, setConfidence] = useState<number | null>(null);
   const { toast } = useToast();
   const [heatmaps, setHeatmaps] = useState<string[]>([]);
+  const [startMinute, setStartMinute] = useState("0");
+  const [startSecond, setStartSecond] = useState("0");
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -32,6 +34,9 @@ export const UploadSection = () => {
     if (droppedFile && droppedFile.type.startsWith("video/")) {
       setFile(droppedFile);
       setResult(null);
+      setFrames([]);
+      setHeatmaps([]);
+      setConfidence(null);
     } else {
       toast({
         title: "Invalid file type",
@@ -46,21 +51,30 @@ export const UploadSection = () => {
     if (selectedFile) {
       setFile(selectedFile);
       setResult(null);
+      setFrames([]);
+      setConfidence(null);
+      setHeatmaps([]);
     }
   };
 
   const analyzeVideo = async () => {
-  const data = await analyzeVideoAPI(file);
+  if (!file) return;
 
-setResult(data.prediction === "Real" ? "real" : "fake");
-setFrames(data.frames || []);
-setHeatmaps(data.heatmaps || []);   // ✅ ADD THIS
+  setIsAnalyzing(true);
+  setResult(null);
+  setFrames([]);
+  setHeatmaps([]);
+  setConfidence(null);
 
   try {
-    const data = await analyzeVideoAPI(file);
+    const minutes = Math.max(0, Number(startMinute) || 0);
+    const seconds = Math.min(59, Math.max(0, Number(startSecond) || 0));
+    const startTime = minutes * 60 + seconds;
+    const data = await analyzeVideoAPI(file, startTime);
 
     setResult(data.prediction === "Real" ? "real" : "fake");
     setFrames(data.frames || []);
+    setHeatmaps(data.heatmaps || []);
     setConfidence(data.confidence);
 
     toast({
@@ -74,9 +88,9 @@ setHeatmaps(data.heatmaps || []);   // ✅ ADD THIS
       description: "Failed to analyze video. Backend not reachable.",
       variant: "destructive",
     });
+  } finally {
+    setIsAnalyzing(false);
   }
-
-  setIsAnalyzing(false);
 };
 
   return (
@@ -136,6 +150,44 @@ setHeatmaps(data.heatmaps || []);   // ✅ ADD THIS
                     {(file.size / (1024 * 1024)).toFixed(2)} MB
                   </p>
                   {!result && !isAnalyzing && (
+                    <div className="mx-auto mb-6 max-w-xs rounded-xl border border-border bg-background/60 p-4 text-left">
+                      <label className="mb-3 block text-sm font-medium">
+                        Start analysis from
+                      </label>
+                      <div className="flex items-center gap-3">
+                        <div className="flex-1">
+                          <span className="mb-1 block text-xs text-muted-foreground">
+                            Minutes
+                          </span>
+                          <input
+                            type="number"
+                            min="0"
+                            value={startMinute}
+                            onChange={(e) => setStartMinute(e.target.value)}
+                            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                          />
+                        </div>
+                        <span className="pt-5 text-muted-foreground">:</span>
+                        <div className="flex-1">
+                          <span className="mb-1 block text-xs text-muted-foreground">
+                            Seconds
+                          </span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="59"
+                            value={startSecond}
+                            onChange={(e) => setStartSecond(e.target.value)}
+                            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                          />
+                        </div>
+                      </div>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Frames will be extracted after this timestamp.
+                      </p>
+                    </div>
+                  )}
+                  {!result && !isAnalyzing && (
                     <Button
                       onClick={analyzeVideo}
                       className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-glow"
@@ -145,9 +197,16 @@ setHeatmaps(data.heatmaps || []);   // ✅ ADD THIS
                     </Button>
                   )}
                   {isAnalyzing && (
-                    <div className="flex items-center justify-center gap-2">
-                      <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                      <span className="text-muted-foreground">Analyzing...</span>
+                    <div className="mt-6 flex flex-col items-center justify-center gap-3 rounded-xl border border-primary/20 bg-primary/5 p-6">
+                      <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
+                        <Loader2 className="h-9 w-9 animate-spin text-primary" />
+                      </div>
+                      <div className="text-center">
+                        <p className="font-semibold">Analyzing video...</p>
+                        <p className="text-sm text-muted-foreground">
+                          Extracting face frames and generating Grad-CAM heatmaps.
+                        </p>
+                      </div>
                     </div>
                   )}
                   {result && confidence !== null && (
@@ -213,7 +272,10 @@ setHeatmaps(data.heatmaps || []);   // ✅ ADD THIS
                       setFile(null);
                       setResult(null);
                       setFrames([]);
+                      setHeatmaps([]);
                       setConfidence(null);
+                      setStartMinute("0");
+                      setStartSecond("0");
                     }}
                   >
                     Upload Another Video
