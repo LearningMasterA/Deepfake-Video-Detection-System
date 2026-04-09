@@ -8,3 +8,5 @@ pillow
 numpy
 python-multipart
 jinja2
+grad-cam
+scikit-learn

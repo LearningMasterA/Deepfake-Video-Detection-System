@@ -29,7 +29,7 @@ for label in ["real", "fake"]:
         frames, raw_images, _ = extract_faces(video_path)
 
         try:
-            score, prediction, _, fake_score = predict(frames, raw_images)
+            score, prediction, _, fake_score, frame_scores = predict(frames, raw_images)
         except RuntimeError as exc:
             raise RuntimeError(f"Cannot evaluate {video_path}: {exc}") from exc
 

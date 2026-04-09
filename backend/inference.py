@@ -40,7 +40,7 @@ def predict(frames, raw_images):
         raise RuntimeError(model_load_error or "Model could not be loaded.")
 
     if len(frames) == 0:
-        return 0.0, "No face detected", [], 0.0
+        return 0.0, "No face detected", [], 0.0, []
 
     batch = torch.stack(frames).to(device)
 
@@ -48,6 +48,10 @@ def predict(frames, raw_images):
         outputs = torch.softmax(model(batch), dim=1)
 
     fake_probs = outputs[:, FAKE_CLASS_INDEX].cpu().numpy()
+    frame_scores = [
+        {"frame": index + 1, "fake_score": float(score)}
+        for index, score in enumerate(fake_probs)
+    ]
 
     sorted_probs = np.sort(fake_probs)
     top_k = max(1, int(0.3 * len(sorted_probs)))
@@ -64,4 +68,4 @@ def predict(frames, raw_images):
             heatmap = generate_gradcam(frames[i], raw_images[i])
             heatmaps.append(heatmap)
 
-    return confidence, prediction, heatmaps, fake_probability
+    return confidence, prediction, heatmaps, fake_probability, frame_scores

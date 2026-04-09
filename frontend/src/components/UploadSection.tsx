@@ -5,6 +5,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { analyzeVideoAPI } from "@/lib/api";
 
+type FrameScore = {
+  frame: number;
+  fake_score: number;
+};
+
 export const UploadSection = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
@@ -16,6 +21,17 @@ export const UploadSection = () => {
   const [heatmaps, setHeatmaps] = useState<string[]>([]);
   const [startMinute, setStartMinute] = useState("0");
   const [startSecond, setStartSecond] = useState("0");
+  const [fakeScore, setFakeScore] = useState<number | null>(null);
+  const [decisionThreshold, setDecisionThreshold] = useState<number | null>(null);
+  const [analysisStartTime, setAnalysisStartTime] = useState<number | null>(null);
+  const [frameScores, setFrameScores] = useState<FrameScore[]>([]);
+
+  const formatTime = (totalSeconds: number) => {
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = Math.floor(totalSeconds % 60);
+
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -37,6 +53,10 @@ export const UploadSection = () => {
       setFrames([]);
       setHeatmaps([]);
       setConfidence(null);
+      setFakeScore(null);
+      setDecisionThreshold(null);
+      setAnalysisStartTime(null);
+      setFrameScores([]);
     } else {
       toast({
         title: "Invalid file type",
@@ -54,6 +74,10 @@ export const UploadSection = () => {
       setFrames([]);
       setConfidence(null);
       setHeatmaps([]);
+      setFakeScore(null);
+      setDecisionThreshold(null);
+      setAnalysisStartTime(null);
+      setFrameScores([]);
     }
   };
 
@@ -65,6 +89,10 @@ export const UploadSection = () => {
   setFrames([]);
   setHeatmaps([]);
   setConfidence(null);
+  setFakeScore(null);
+  setDecisionThreshold(null);
+  setAnalysisStartTime(null);
+  setFrameScores([]);
 
   try {
     const minutes = Math.max(0, Number(startMinute) || 0);
@@ -76,6 +104,10 @@ export const UploadSection = () => {
     setFrames(data.frames || []);
     setHeatmaps(data.heatmaps || []);
     setConfidence(data.confidence);
+    setFakeScore(data.fake_score ?? null);
+    setDecisionThreshold(data.decision_threshold ?? null);
+    setAnalysisStartTime(data.start_time ?? startTime);
+    setFrameScores(data.frame_scores || []);
 
     toast({
       title: "Analysis Complete",
@@ -262,6 +294,27 @@ export const UploadSection = () => {
           />
         </div>
       </div>
+
+      <div className="mt-6 grid w-full max-w-md grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+        {fakeScore !== null && (
+          <div className="rounded-lg border border-border bg-background/60 p-3">
+            <p className="text-muted-foreground">Fake Score</p>
+            <p className="font-semibold">{(fakeScore * 100).toFixed(2)}%</p>
+          </div>
+        )}
+        {decisionThreshold !== null && (
+          <div className="rounded-lg border border-border bg-background/60 p-3">
+            <p className="text-muted-foreground">Threshold</p>
+            <p className="font-semibold">{(decisionThreshold * 100).toFixed(0)}%</p>
+          </div>
+        )}
+        {analysisStartTime !== null && (
+          <div className="rounded-lg border border-border bg-background/60 p-3">
+            <p className="text-muted-foreground">Started At</p>
+            <p className="font-semibold">{formatTime(analysisStartTime)}</p>
+          </div>
+        )}
+      </div>
     </div>
   </div>
 )}
@@ -274,6 +327,10 @@ export const UploadSection = () => {
                       setFrames([]);
                       setHeatmaps([]);
                       setConfidence(null);
+                      setFakeScore(null);
+                      setDecisionThreshold(null);
+                      setAnalysisStartTime(null);
+                      setFrameScores([]);
                       setStartMinute("0");
                       setStartSecond("0");
                     }}
@@ -308,6 +365,25 @@ export const UploadSection = () => {
     </div>
   </div>
 )}
+{frameScores.length > 0 && (
+  <div className="mt-8">
+    <h4 className="text-xl font-semibold text-center mb-4">
+      Frame-Level Fake Scores
+    </h4>
+
+    <div className="mx-auto grid max-w-4xl grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
+      {frameScores.map((item) => (
+        <div
+          key={item.frame}
+          className="rounded-lg border border-border bg-background/60 p-3 text-center text-sm"
+        >
+          <p className="text-muted-foreground">Frame {item.frame}</p>
+          <p className="font-semibold">{(item.fake_score * 100).toFixed(2)}%</p>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
 {heatmaps.length > 0 && (
   <div className="mt-8">
     <h4 className="text-xl font-semibold mb-4 text-center">
@@ -333,6 +409,11 @@ export const UploadSection = () => {
       ))}
     </div>
   </div>
+)}
+{result === "real" && heatmaps.length === 0 && confidence !== null && (
+  <p className="mt-8 text-center text-sm text-muted-foreground">
+    Grad-CAM heatmaps are generated only when the video is classified as Fake.
+  </p>
 )}
           </CardContent>
         </Card>

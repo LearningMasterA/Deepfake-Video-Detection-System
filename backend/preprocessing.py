@@ -1,10 +1,12 @@
 import cv2
 import torch
 import os
-from PIL import Image
 import torchvision.transforms as transforms
+from facenet_pytorch import MTCNN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+FACE_DETECTOR = os.getenv("FACE_DETECTOR", "haar").lower()
+mtcnn = MTCNN(keep_all=True, device=device)
 
 # face_cascade = cv2.CascadeClassifier(
 #     cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
@@ -29,7 +31,7 @@ def extract_faces(video_path, output_prefix="frame", start_time_seconds=0.0):
     # create folder for saving frames
     os.makedirs("static", exist_ok=True)
 
-    # Haar cascade for face detection
+    # Fallback detector for frames where MTCNN misses faces.
     face_cascade = cv2.CascadeClassifier(
         cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
     )
@@ -57,17 +59,39 @@ def extract_faces(video_path, output_prefix="frame", start_time_seconds=0.0):
 
         print(f"Reading frame: {frame_count}")
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        detected_faces = []
 
-        faces = face_cascade.detectMultiScale(
-            gray,
-            scaleFactor=1.3,
-            minNeighbors=5
-        )
+        if FACE_DETECTOR == "mtcnn":
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            boxes, probs = mtcnn.detect(frame_rgb)
 
-        for (x, y, w, h) in faces:
+            if boxes is not None:
+                for box, prob in zip(boxes, probs):
+                    if prob is None or prob < 0.90:
+                        continue
 
-            face = frame[y:y+h, x:x+w]
+                    x1, y1, x2, y2 = box.astype(int)
+                    x1 = max(0, x1)
+                    y1 = max(0, y1)
+                    x2 = min(frame.shape[1], x2)
+                    y2 = min(frame.shape[0], y2)
+
+                    detected_faces.append((x1, y1, x2, y2))
+
+        if not detected_faces:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            haar_faces = face_cascade.detectMultiScale(
+                gray,
+                scaleFactor=1.3,
+                minNeighbors=5
+            )
+
+            for (x, y, w, h) in haar_faces:
+                detected_faces.append((x, y, x + w, y + h))
+
+        for (x1, y1, x2, y2) in detected_faces:
+
+            face = frame[y1:y2, x1:x2]
 
             if face.size == 0:
                 continue
