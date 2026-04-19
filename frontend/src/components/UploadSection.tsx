@@ -1,20 +1,50 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Upload, FileVideo, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
+import { AxiosError } from "axios";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { analyzeVideoAPI } from "@/lib/api";
+import { analyzeVideoAPI, resolveApiAssetUrl } from "@/lib/api";
+import { downloadAnalysisPdf } from "@/lib/pdfReport";
 
 type FrameScore = {
   frame: number;
   fake_score: number;
 };
 
+type VideoValidation = {
+  is_valid: boolean;
+  duration_seconds?: number;
+  fps?: number;
+  frame_count?: number;
+  width?: number;
+  height?: number;
+  size_mb?: number;
+  extension?: string;
+  source?: "browser" | "backend";
+};
+
+type ModelMetadata = {
+  architecture: string;
+  checkpoint_path: string;
+  device: string;
+  model_loaded: boolean;
+  load_error?: string | null;
+  fake_class_index: number;
+  normalization: string;
+  label_map: string[];
+  num_classes: number;
+};
+
+const ALLOWED_EXTENSIONS = new Set(["mp4", "mov", "avi", "mkv", "webm"]);
+const MAX_UPLOAD_SIZE_MB = 100;
+
 export const UploadSection = () => {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [result, setResult] = useState<"real" | "fake" | null>(null);
+  const [result, setResult] = useState<"real" | "fake" | "uncertain" | null>(null);
   const [frames, setFrames] = useState<string[]>([]);
   const [confidence, setConfidence] = useState<number | null>(null);
   const { toast } = useToast();
@@ -24,13 +54,104 @@ export const UploadSection = () => {
   const [fakeScore, setFakeScore] = useState<number | null>(null);
   const [decisionThreshold, setDecisionThreshold] = useState<number | null>(null);
   const [analysisStartTime, setAnalysisStartTime] = useState<number | null>(null);
+  const [analyzedSegments, setAnalyzedSegments] = useState<number[]>([]);
   const [frameScores, setFrameScores] = useState<FrameScore[]>([]);
+  const [videoValidation, setVideoValidation] = useState<VideoValidation | null>(null);
+  const [modelMetadata, setModelMetadata] = useState<ModelMetadata | null>(null);
+
+  const resetAnalysisState = () => {
+    setResult(null);
+    setFrames([]);
+    setHeatmaps([]);
+    setConfidence(null);
+    setFakeScore(null);
+    setDecisionThreshold(null);
+    setAnalysisStartTime(null);
+    setAnalyzedSegments([]);
+    setFrameScores([]);
+    setVideoValidation(null);
+    setModelMetadata(null);
+  };
 
   const formatTime = (totalSeconds: number) => {
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = Math.floor(totalSeconds % 60);
 
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  };
+
+  const readVideoMetadata = (selectedFile: File) =>
+    new Promise<{ duration: number; width: number; height: number }>((resolve, reject) => {
+      const video = document.createElement("video");
+      const objectUrl = URL.createObjectURL(selectedFile);
+
+      video.preload = "metadata";
+      video.onloadedmetadata = () => {
+        const duration = Number.isFinite(video.duration) ? video.duration : 0;
+        resolve({
+          duration,
+          width: video.videoWidth,
+          height: video.videoHeight,
+        });
+        URL.revokeObjectURL(objectUrl);
+      };
+      video.onerror = () => {
+        reject(new Error("The selected file could not be read as a valid video."));
+        URL.revokeObjectURL(objectUrl);
+      };
+      video.src = objectUrl;
+    });
+
+  const validateAndStoreFile = async (selectedFile: File) => {
+    const extension = selectedFile.name.split(".").pop()?.toLowerCase() || "";
+
+    if (!ALLOWED_EXTENSIONS.has(extension)) {
+      toast({
+        title: "Unsupported video format",
+        description: "Use mp4, mov, avi, mkv, or webm.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const sizeMb = selectedFile.size / (1024 * 1024);
+    if (sizeMb > MAX_UPLOAD_SIZE_MB) {
+      toast({
+        title: "Video too large",
+        description: "Please upload a video smaller than 100 MB.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      const metadata = await readVideoMetadata(selectedFile);
+      if (metadata.duration <= 0 || metadata.width <= 0 || metadata.height <= 0) {
+        throw new Error("The selected video file has invalid metadata.");
+      }
+
+      setFile(selectedFile);
+      resetAnalysisState();
+      setVideoValidation({
+        is_valid: true,
+        duration_seconds: metadata.duration,
+        width: metadata.width,
+        height: metadata.height,
+        size_mb: Number(sizeMb.toFixed(2)),
+        extension,
+        source: "browser",
+      });
+    } catch (error) {
+      const description =
+        error instanceof Error ? error.message : "The selected file is not a valid video.";
+      toast({
+        title: "Invalid video",
+        description,
+        variant: "destructive",
+      });
+      setFile(null);
+      resetAnalysisState();
+    }
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -42,21 +163,13 @@ export const UploadSection = () => {
     setIsDragging(false);
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
     
     const droppedFile = e.dataTransfer.files[0];
     if (droppedFile && droppedFile.type.startsWith("video/")) {
-      setFile(droppedFile);
-      setResult(null);
-      setFrames([]);
-      setHeatmaps([]);
-      setConfidence(null);
-      setFakeScore(null);
-      setDecisionThreshold(null);
-      setAnalysisStartTime(null);
-      setFrameScores([]);
+      await validateAndStoreFile(droppedFile);
     } else {
       toast({
         title: "Invalid file type",
@@ -66,18 +179,10 @@ export const UploadSection = () => {
     }
   };
 
-  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
-      setFile(selectedFile);
-      setResult(null);
-      setFrames([]);
-      setConfidence(null);
-      setHeatmaps([]);
-      setFakeScore(null);
-      setDecisionThreshold(null);
-      setAnalysisStartTime(null);
-      setFrameScores([]);
+      await validateAndStoreFile(selectedFile);
     }
   };
 
@@ -85,14 +190,7 @@ export const UploadSection = () => {
   if (!file) return;
 
   setIsAnalyzing(true);
-  setResult(null);
-  setFrames([]);
-  setHeatmaps([]);
-  setConfidence(null);
-  setFakeScore(null);
-  setDecisionThreshold(null);
-  setAnalysisStartTime(null);
-  setFrameScores([]);
+  resetAnalysisState();
 
   try {
     const minutes = Math.max(0, Number(startMinute) || 0);
@@ -100,14 +198,23 @@ export const UploadSection = () => {
     const startTime = minutes * 60 + seconds;
     const data = await analyzeVideoAPI(file, startTime);
 
-    setResult(data.prediction === "Real" ? "real" : "fake");
+    setResult(
+      data.prediction === "Real"
+        ? "real"
+        : data.prediction === "Fake"
+          ? "fake"
+          : "uncertain"
+    );
     setFrames(data.frames || []);
     setHeatmaps(data.heatmaps || []);
     setConfidence(data.confidence);
     setFakeScore(data.fake_score ?? null);
     setDecisionThreshold(data.decision_threshold ?? null);
     setAnalysisStartTime(data.start_time ?? startTime);
+    setAnalyzedSegments(data.analyzed_segments || []);
     setFrameScores(data.frame_scores || []);
+    setVideoValidation(data.video_validation || videoValidation);
+    setModelMetadata(data.model_metadata || null);
 
     toast({
       title: "Analysis Complete",
@@ -115,15 +222,46 @@ export const UploadSection = () => {
     });
 
   } catch (error) {
+    const description =
+      error instanceof AxiosError
+        ? error.response?.data?.detail ||
+          error.response?.data?.message ||
+          error.message
+        : "Failed to analyze video.";
+
     toast({
       title: "Error",
-      description: "Failed to analyze video. Backend not reachable.",
+      description,
       variant: "destructive",
     });
   } finally {
     setIsAnalyzing(false);
   }
 };
+
+  const downloadPdfReport = () => {
+    if (!file || !result) return;
+
+    downloadAnalysisPdf({
+      fileName: file.name,
+      prediction: result,
+      confidence,
+      fakeScore,
+      decisionThreshold,
+      analysisStartTime,
+      analyzedSegments,
+      frameScores,
+      framesCount: frames.length,
+      heatmapsCount: heatmaps.length,
+      videoValidation,
+      modelMetadata,
+    });
+
+    toast({
+      title: "PDF Report Ready",
+      description: "The analysis report has been downloaded.",
+    });
+  };
 
   return (
     <section id="upload-section" className="py-24 px-4 bg-background/50">
@@ -159,6 +297,7 @@ export const UploadSection = () => {
                     or click to browse files
                   </p>
                   <input
+                    ref={fileInputRef}
                     type="file"
                     accept="video/*"
                     onChange={handleFileInput}
@@ -246,7 +385,9 @@ export const UploadSection = () => {
     className={`mt-8 p-8 rounded-2xl shadow-xl transition-all duration-500 animate-in fade-in zoom-in-95 ${
       result === "real"
         ? "bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 border border-emerald-500/30"
-        : "bg-gradient-to-br from-red-500/10 to-red-600/5 border border-red-500/30"
+        : result === "fake"
+          ? "bg-gradient-to-br from-red-500/10 to-red-600/5 border border-red-500/30"
+          : "bg-gradient-to-br from-amber-500/10 to-amber-600/5 border border-amber-500/30"
     }`}
   >
     <div className="flex flex-col items-center text-center">
@@ -254,24 +395,34 @@ export const UploadSection = () => {
         className={`w-16 h-16 flex items-center justify-center rounded-full mb-4 ${
           result === "real"
             ? "bg-emerald-500/20"
-            : "bg-red-500/20"
+            : result === "fake"
+              ? "bg-red-500/20"
+              : "bg-amber-500/20"
         }`}
       >
         {result === "real" ? (
           <CheckCircle2 className="w-10 h-10 text-emerald-500" />
-        ) : (
+        ) : result === "fake" ? (
           <AlertCircle className="w-10 h-10 text-red-500" />
+        ) : (
+          <AlertCircle className="w-10 h-10 text-amber-500" />
         )}
       </div>
 
       <h3 className="text-3xl font-bold mb-2">
-        {result === "real" ? "Authentic Video" : "Deepfake Detected"}
+        {result === "real"
+          ? "Authentic Video"
+          : result === "fake"
+            ? "Deepfake Detected"
+            : "Needs Review"}
       </h3>
 
       <p className="text-muted-foreground mb-6 max-w-md">
         {result === "real"
           ? "No significant manipulation patterns were detected."
-          : "Model detected suspicious manipulation patterns in the facial region."}
+          : result === "fake"
+            ? "Model detected suspicious manipulation patterns in the facial region."
+            : "The score is close to the decision boundary. Review the frames before making a final call."}
       </p>
 
       {/* Confidence Progress Bar */}
@@ -288,7 +439,9 @@ export const UploadSection = () => {
             className={`h-full transition-all duration-700 ${
               result === "real"
                 ? "bg-emerald-500"
-                : "bg-red-500"
+                : result === "fake"
+                  ? "bg-red-500"
+                  : "bg-amber-500"
             }`}
             style={{ width: `${confidence * 100}%` }}
           />
@@ -315,6 +468,22 @@ export const UploadSection = () => {
           </div>
         )}
       </div>
+
+      {analyzedSegments.length > 0 && (
+        <div className="mt-4 w-full max-w-md rounded-lg border border-border bg-background/60 p-3 text-sm">
+          <p className="mb-2 text-muted-foreground">Analyzed Segments</p>
+          <div className="flex flex-wrap justify-center gap-2">
+            {analyzedSegments.map((segment, index) => (
+              <span
+                key={`${segment}-${index}`}
+                className="rounded-full border border-border px-3 py-1"
+              >
+                {formatTime(segment)}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   </div>
 )}
@@ -323,24 +492,84 @@ export const UploadSection = () => {
                     className="mt-4"
                     onClick={() => {
                       setFile(null);
-                      setResult(null);
-                      setFrames([]);
-                      setHeatmaps([]);
-                      setConfidence(null);
-                      setFakeScore(null);
-                      setDecisionThreshold(null);
-                      setAnalysisStartTime(null);
-                      setFrameScores([]);
+                      resetAnalysisState();
                       setStartMinute("0");
                       setStartSecond("0");
+                      requestAnimationFrame(() => {
+                        fileInputRef.current?.click();
+                      });
                     }}
                   >
                     Upload Another Video
                   </Button>
+                  {result && confidence !== null && (
+                    <Button
+                      variant="outline"
+                      className="mt-3"
+                      onClick={downloadPdfReport}
+                    >
+                      Download PDF Report
+                    </Button>
+                  )}
                 </>
               )}
             </div>
 
+            {videoValidation && (
+              <div className="mt-8">
+                <h4 className="text-xl font-semibold text-center mb-4">
+                  Video Validity Check
+                </h4>
+                <div className="mx-auto grid max-w-4xl grid-cols-2 gap-3 text-sm md:grid-cols-4">
+                  <div className="rounded-lg border border-border bg-background/60 p-3">
+                    <p className="text-muted-foreground">Status</p>
+                    <p className="font-semibold">{videoValidation.is_valid ? "Valid" : "Invalid"}</p>
+                  </div>
+                  {videoValidation.extension && (
+                    <div className="rounded-lg border border-border bg-background/60 p-3">
+                      <p className="text-muted-foreground">Extension</p>
+                      <p className="font-semibold uppercase">{videoValidation.extension}</p>
+                    </div>
+                  )}
+                  {videoValidation.size_mb !== undefined && (
+                    <div className="rounded-lg border border-border bg-background/60 p-3">
+                      <p className="text-muted-foreground">Size</p>
+                      <p className="font-semibold">{videoValidation.size_mb.toFixed(2)} MB</p>
+                    </div>
+                  )}
+                  {videoValidation.duration_seconds !== undefined && (
+                    <div className="rounded-lg border border-border bg-background/60 p-3">
+                      <p className="text-muted-foreground">Duration</p>
+                      <p className="font-semibold">{formatTime(videoValidation.duration_seconds)}</p>
+                    </div>
+                  )}
+                  {videoValidation.width && videoValidation.height && (
+                    <div className="rounded-lg border border-border bg-background/60 p-3">
+                      <p className="text-muted-foreground">Resolution</p>
+                      <p className="font-semibold">{videoValidation.width}x{videoValidation.height}</p>
+                    </div>
+                  )}
+                  {videoValidation.fps !== undefined && (
+                    <div className="rounded-lg border border-border bg-background/60 p-3">
+                      <p className="text-muted-foreground">FPS</p>
+                      <p className="font-semibold">{videoValidation.fps.toFixed(2)}</p>
+                    </div>
+                  )}
+                  {videoValidation.frame_count !== undefined && (
+                    <div className="rounded-lg border border-border bg-background/60 p-3">
+                      <p className="text-muted-foreground">Frames</p>
+                      <p className="font-semibold">{videoValidation.frame_count}</p>
+                    </div>
+                  )}
+                  {videoValidation.source && (
+                    <div className="rounded-lg border border-border bg-background/60 p-3">
+                      <p className="text-muted-foreground">Checked By</p>
+                      <p className="font-semibold capitalize">{videoValidation.source}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {frames.length > 0 && (
   <div className="mt-12">
@@ -356,7 +585,7 @@ export const UploadSection = () => {
         >
         <img
           key={index}
-          src={`http://localhost:8000${img}`}
+          src={resolveApiAssetUrl(img)}
           alt="frame"
           className="w-full h-full object-cover"
         />
@@ -398,7 +627,7 @@ export const UploadSection = () => {
       {heatmaps.map((img, index) => (
         <div key={index} className="flex flex-col items-center">
           <img
-            src={`http://localhost:8000${img}`}
+            src={resolveApiAssetUrl(img)}
             alt="heatmap"
             className="w-40 rounded shadow border border-primary/30"
           />

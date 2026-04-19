@@ -6,7 +6,25 @@ from facenet_pytorch import MTCNN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 FACE_DETECTOR = os.getenv("FACE_DETECTOR", "haar").lower()
+USE_IMAGENET_NORMALIZATION = os.getenv("USE_IMAGENET_NORMALIZATION", "0") == "1"
+FRAME_STRIDE = max(1, int(os.getenv("FRAME_STRIDE", "5")))
 mtcnn = MTCNN(keep_all=True, device=device)
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+face_cascade = cv2.CascadeClassifier(
+    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+)
+
+transform_steps = [
+    transforms.ToPILImage(),
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+]
+
+if USE_IMAGENET_NORMALIZATION:
+    transform_steps.append(transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD))
+
+transform = transforms.Compose(transform_steps)
 
 # face_cascade = cv2.CascadeClassifier(
 #     cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
@@ -17,9 +35,16 @@ mtcnn = MTCNN(keep_all=True, device=device)
 #     transforms.ToTensor()
 # ])
 
-def extract_faces(video_path, output_prefix="frame", start_time_seconds=0.0):
+def extract_faces(video_path, output_prefix="frame", start_time_seconds=0.0, max_faces=15):
 
     cap = cv2.VideoCapture(video_path)
+
+    if not cap.isOpened():
+        cap.release()
+        raise RuntimeError(
+            f"Unable to open video: {video_path}. The file may be corrupted or "
+            "its codec may not be supported by this OpenCV build."
+        )
 
     if start_time_seconds > 0:
         cap.set(cv2.CAP_PROP_POS_MSEC, start_time_seconds * 1000)
@@ -31,18 +56,6 @@ def extract_faces(video_path, output_prefix="frame", start_time_seconds=0.0):
     # create folder for saving frames
     os.makedirs("static", exist_ok=True)
 
-    # Fallback detector for frames where MTCNN misses faces.
-    face_cascade = cv2.CascadeClassifier(
-        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-    )
-
-    # transform for model input
-    transform = transforms.Compose([
-        transforms.ToPILImage(),
-        transforms.Resize((224, 224)),
-        transforms.ToTensor()
-    ])
-
     frame_count = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
     saved_count = 0
 
@@ -52,8 +65,8 @@ def extract_faces(video_path, output_prefix="frame", start_time_seconds=0.0):
         if not ret:
             break
 
-        # read every 5th frame (faster)
-        if frame_count % 5 != 0:
+        # Skip more frames by default for faster video analysis.
+        if frame_count % FRAME_STRIDE != 0:
             frame_count += 1
             continue
 
@@ -115,12 +128,12 @@ def extract_faces(video_path, output_prefix="frame", start_time_seconds=0.0):
             saved_count += 1
 
             # limit number of faces (important for speed)
-            if saved_count >= 15:
+            if saved_count >= max_faces:
                 break
 
         frame_count += 1
 
-        if saved_count >= 15:
+        if saved_count >= max_faces:
             break
 
     cap.release()

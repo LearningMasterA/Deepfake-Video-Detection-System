@@ -2,9 +2,11 @@ import torch
 from torchvision.models import efficientnet_b0
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+CHECKPOINT_PATH = "models/deepfake_model.pth"
 
 model = None
 model_load_error = None
+checkpoint_metadata = {}
 
 
 def load_model():
@@ -18,13 +20,19 @@ def load_model():
 
     # Load checkpoint
     checkpoint = torch.load(
-        "models/deepfake_model.pth",
+        CHECKPOINT_PATH,
         map_location=device,
         weights_only=False
     )
+    metadata = {}
 
     # Some checkpoints store weights under "state_dict"
     if "state_dict" in checkpoint:
+        metadata = {
+            "fake_class_index": checkpoint.get("fake_class_index"),
+            "normalization": checkpoint.get("normalization"),
+            "label_map": checkpoint.get("label_map"),
+        }
         checkpoint = checkpoint["state_dict"]
 
     # Remove "module." prefix if model was trained using DataParallel
@@ -63,10 +71,25 @@ def load_model():
     loaded_model = loaded_model.to(device)
     loaded_model.eval()
 
-    return loaded_model
+    return loaded_model, metadata
+
+
+def get_model_metadata():
+    label_map = checkpoint_metadata.get("label_map") or ["real", "fake"]
+    return {
+        "architecture": "efficientnet_b0",
+        "checkpoint_path": CHECKPOINT_PATH,
+        "device": str(device),
+        "model_loaded": model is not None,
+        "load_error": model_load_error,
+        "fake_class_index": checkpoint_metadata.get("fake_class_index", 0),
+        "normalization": checkpoint_metadata.get("normalization", "unknown"),
+        "label_map": label_map,
+        "num_classes": len(label_map),
+    }
 
 
 try:
-    model = load_model()
+    model, checkpoint_metadata = load_model()
 except Exception as exc:
     model_load_error = str(exc)

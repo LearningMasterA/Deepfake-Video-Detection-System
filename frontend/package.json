@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "frontend": "vite",
-    "backend": "cd ../backend && python -m uvicorn app:app --reload",
+    "backend": "cd ../backend && set USE_IMAGENET_NORMALIZATION=1 && set FAKE_CLASS_INDEX=0 && set DECISION_THRESHOLD=0.5 && set UNCERTAIN_MARGIN=0.05 && set SEGMENT_COUNT=3 && set MAX_TOTAL_FACES=15 && set FRAME_STRIDE=5 && set ENABLE_TTA=1 && set MAX_HEATMAPS=5 && set GRADCAM_METHOD=gradcam++ && set GRADCAM_ALPHA=0.34 && set GRADCAM_BLUR_KERNEL=7 && set GRADCAM_TARGET_LAYER_INDEX=-2 && set GRADCAM_POWER=1.6 && set GRADCAM_PERCENTILE_FLOOR=70 && set GRADCAM_USE_FACE_MASK=1 && set ENABLE_GRADCAM_TTA=1 && python -m uvicorn app:app --reload",
     "dev": "concurrently \"npm run frontend\" \"npm run backend\""
   },
   "dependencies": {

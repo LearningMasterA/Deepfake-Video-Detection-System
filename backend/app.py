@@ -11,6 +11,7 @@ import uuid
 import time
 from gradcam import generate_gradcam
 
+from model_loader import get_model_metadata
 from preprocessing import extract_faces
 from inference import DECISION_THRESHOLD, FAKE_CLASS_INDEX, predict
 
@@ -36,6 +37,8 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 STATIC_FOLDER = "static"
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024
 ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+SEGMENT_COUNT = int(os.getenv("SEGMENT_COUNT", "3"))
+MAX_TOTAL_FACES = int(os.getenv("MAX_TOTAL_FACES", "15"))
 
 
 def cleanup_old_generated_files(max_age_seconds=3600):
@@ -49,6 +52,58 @@ def cleanup_old_generated_files(max_age_seconds=3600):
         path = os.path.join(STATIC_FOLDER, filename)
         if os.path.isfile(path) and now - os.path.getmtime(path) > max_age_seconds:
             os.remove(path)
+
+
+def inspect_video_file(video_path):
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        cap.release()
+        raise RuntimeError(
+            "OpenCV could not open the uploaded video. The file may be corrupted "
+            "or encoded with an unsupported codec."
+        )
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 0
+    frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    cap.release()
+
+    if fps <= 0:
+        raise RuntimeError(
+            "The uploaded video could not be parsed correctly. OpenCV could not "
+            "read its FPS metadata."
+        )
+
+    duration_seconds = float(frame_count / fps)
+    return {
+        "is_valid": True,
+        "duration_seconds": duration_seconds,
+        "fps": float(fps),
+        "frame_count": int(frame_count),
+        "width": width,
+        "height": height,
+        "size_mb": round(os.path.getsize(video_path) / (1024 * 1024), 2),
+    }
+
+
+def build_segment_start_times(start_time, duration, segment_count=SEGMENT_COUNT):
+    if duration <= 0:
+        return [start_time]
+
+    anchors = [start_time]
+    fractions = [0.35, 0.7]
+
+    for fraction in fractions[: max(0, segment_count - 1)]:
+        anchors.append(max(start_time, duration * fraction))
+
+    unique_times = []
+    for anchor in anchors:
+        anchor = min(anchor, max(0.0, duration - 1.0))
+        if all(abs(anchor - existing) > 0.5 for existing in unique_times):
+            unique_times.append(anchor)
+
+    return unique_times
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
@@ -83,7 +138,34 @@ async def detect_deepfake(
         os.remove(file_path)
         raise HTTPException(status_code=400, detail="Video file is larger than 100 MB.")
 
-    frames,raw_images, image_paths = extract_faces(file_path, request_id, start_time)
+    try:
+        video_validation = inspect_video_file(file_path)
+    except RuntimeError as exc:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    duration_seconds = video_validation["duration_seconds"]
+    segment_starts = build_segment_start_times(start_time, duration_seconds)
+    faces_per_segment = max(1, MAX_TOTAL_FACES // max(1, len(segment_starts)))
+
+    frames = []
+    raw_images = []
+    image_paths = []
+
+    try:
+        for index, segment_start in enumerate(segment_starts):
+            segment_frames, segment_raw_images, segment_image_paths = extract_faces(
+                file_path,
+                f"{request_id}_seg{index}",
+                segment_start,
+                faces_per_segment,
+            )
+            frames.extend(segment_frames)
+            raw_images.extend(segment_raw_images)
+            image_paths.extend(segment_image_paths)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     
     try:
         score, prediction, heatmaps, fake_score, frame_scores = predict(frames, raw_images)
@@ -96,6 +178,7 @@ async def detect_deepfake(
                 "confidence_display": "Unavailable - model not loaded",
                 "frames": image_paths,
                 "start_time": start_time,
+                "analyzed_segments": segment_starts,
                 "heatmaps": [],
                 "heatmaps_display": "Unavailable - model not loaded",
                 "error": str(exc),
@@ -121,7 +204,10 @@ async def detect_deepfake(
     "fake_score": fake_score,
     "fake_class_index": FAKE_CLASS_INDEX,
     "decision_threshold": DECISION_THRESHOLD,
+    "model_metadata": get_model_metadata(),
+    "video_validation": video_validation,
     "start_time": start_time,
+    "analyzed_segments": segment_starts,
     "frame_scores": frame_scores,
     "frames": image_paths,
     "heatmaps": heatmap_paths
